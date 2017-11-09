@@ -1,0 +1,211 @@
+/// OSC 播控主机程序 v1.1 ///
+// 作者：    李嵘 于2017/10/26
+// 最后修改：Wing 于2017/10/31
+
+// 简介
+// 1. 将场景频道及播控状态群发给从机。
+// 2. 值的传递行为是主动的，当按下控制面板的按钮，值才会被传递。
+// 3. 提供补发机制。
+// 5. 文本显示网络同步状态。
+// 4. 统计并显示补发、超时次数。
+
+// v1.1 
+// - 使用数组，数组的使用方法：在脚本外围连接数组变量节点即可。
+// - 增加补发、超时计数。
+
+using System;
+using Ventuz.Kernel;
+
+/// include ///
+// NA...
+
+
+public class Script : ScriptBase, System.IDisposable
+{
+    /// Inputs ///
+    // bool[] ReturnSign;  // 从机回传的信号， 真：返还， 假：空闲
+    // int InputChannel;   // 输入的场景频道
+    // Methed Play, Pause, Reset; // 连接至GUI
+    
+    /// Outputs ///
+    // bool[] SendSign;    // 发送给从机的信号，真：工作，假：空闲
+    // int SendChannel;    // 输出的场景频道
+    // int PlayStatus;     // 0-空闲, 1-播放, 2-暂停, 3-重置
+    // Int[] TimeOutConnt, ReplacementDataCount; // 连接至GUI的文本
+    // string[] Message;
+    // Event Send01, Send02, Send03, Send04; // 事件连接至OSCOUT节点，通知发送
+    
+    /// Inside Variable ///
+    private bool bChanged = false; // 是否改变了值，如果改变了，变成true，发送给从机
+    private bool[] returnSign  = new bool[4];
+    private bool[] sendSign = new bool[4];
+    private int changeTime;
+    private int[] timer = new int[4];
+    private int[] timeOutConnt;          // 超时计数
+    private int[] replacementDataCount;  // 补发计数
+    private string[] message = new string[4];
+
+    
+    private bool changed;
+    
+    public Script() {}
+    public virtual void Dispose() {}
+    public override void Validate() {}
+    
+    /// Main ///
+    public override bool Generate() 
+    {
+        update();
+        reset();
+        transfer(); // 赋值数据
+
+        changed = true;
+        
+        if (changed)
+        {
+            changed = false;
+            return true;
+        }
+
+        return false;
+    }
+
+
+    /// Function ///
+
+    public void transfer()
+    {
+        SendSign = sendSign;
+
+        // 传递频道
+        // 一般在控制面板操作时，先设置频道
+        // 当产生播控行为时，频道信息被一并传送
+        SendChannel = InputChannel; 
+
+        // 传递文本
+        ReplacementDataCount = replacementDataCount;
+        TimeOutConnt = timeOutConnt；
+        Message = message;
+
+    }
+
+    public void reset() 
+    {
+        // 如果状态改变，重置所有参数
+        if (bChanged) 
+        {
+            PlayStatus = 0;   // 传递空闲状态
+            changeTime = 0;   // 时间控制变为0
+            bChanged = false;
+        }
+
+        // 如果播放状态不为空闲，保持一段时间
+        if (PlayStatus != 0)
+        {
+            changeTime ++;
+        }
+
+        if (changeTime == 10)
+        {
+            bChanged = true;
+        }
+    }
+    
+    public void update() 
+    {
+        returnSign = ReturnSign;
+
+        for (int i = 0; i < 4; i++) 
+        {
+            procValue(i);
+        }
+    }
+
+    // 计时并计入日志
+    public void procValue(int index)
+    {
+        // 如果按下开始键（激活SendSign）
+        if (sendSign[index]) 
+        {
+            timer[index] ++; // 开始计时
+
+            // 正常处理
+            // 如果收到返还信号，书写日志
+            if (returnSign[index])
+            {
+                sendSign[index] = false;  // 关闭发送信号
+
+                message[index] =  Convert.ToString(index+1) 
+                  + "号机发送成功，耗时"+Convert.ToString(timer[index]) + "帧";
+
+                // 更新从机状态
+                switch(index) {
+                    case 0 : Send01();
+                    break;
+                    case 1 : Send02();
+                    break;
+                    case 2 : Send03();
+                    break;
+                    case 3 : Send04();
+                    break;
+                }
+
+                timer[index] = 0;
+                return false;
+            }
+            
+            // 补发处理
+            if (timer[index] == 10) 
+            {
+                replacementDataCount[index] ++;
+                OnPlay();
+                 message[index] =  Convert.ToString(index+1) + "号机补发";
+            }
+            
+            // 超时处理 - 抛弃事件
+            if (timer[index] == 20) 
+            {
+                timeOutConnt[index] ++;
+                 message[index] =  Convert.ToString(index+1) + "号机超时";
+                timer[index] = 0;
+                // 关闭发送信号
+                sendSign[index] = false;
+            }
+        }
+    }
+
+
+    /// Method ///
+
+    public void OnPlay()
+    {
+        PlayStatus = 1; // 传递播放状态
+
+        // 激活输出信号
+        for (int i = 0; i < 4; i++) 
+        {
+            sendSign[i] = true;    
+        }
+        
+        SendSign = sendSign;
+
+        Send01();
+        Send02();
+        Send03();
+        Send04();
+    } 
+
+    public bool OnPause(int arg)
+    {
+        PlayStatus = 2; // 传递暂停状态
+
+        return false;
+    }
+
+    public bool OnReset(int arg)
+    {
+        PlayStatus = 3; // 传递重置状态
+
+        return false;
+    }
+}
